@@ -1,0 +1,19 @@
+linux (6.8.7) unstable; urgency=medium
+
+  [ Diederik de Haas ]
+  * d/templates/main.control.in: Add python3-dacite as linux-support Depends
+  * [armhf] Improve Tegra Chromebook support (Closes: #1061680)
+    - [armhf] drivers/net/wireless/marvell/mwifiex: Enable MWIFIEX and
+      MWIFIEX_SDIO as modules
+    - [armhf] drivers/power/supply: Enable CHARGER_BQ24735 as module
+    - [armhf] drivers/hwmon: Enable SENSORS_LM90 as module
+    - [armhf] drivers/media/cec/platform: Enable CEC_TEGRA as module
+
+  [ Vincent Blut ]
+  * [arm64] Improve support for SolidRun Honeycomb Workstation:
+    - drivers/pci/controller/mobiveil: Enable PCIE_LAYERSCAPE_GEN4
+      (Closes: #1061116)
+    - drivers/phy/freescale: Enable PHY_FSL_LYNX_28G as module
+      (Closes: #1061117)
+
+ -- Lingmo OS Team <team@lingmo.org>  SAT, 20 Apr 2024 01:11:02 +0800
