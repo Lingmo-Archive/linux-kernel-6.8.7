@@ -41,7 +41,7 @@ jobs:
       run: apt-get install -y equivs curl git devscripts lintian build-essential automake autotools-dev
     - name: Install build dependencies
       run: |
-        mk-build-deps -i -t "apt-get --yes" -r
+        apt build-dep ./
     - name: Build Package
       run: |
         dpkg-buildpackage -b -uc -us -j$(nproc)
