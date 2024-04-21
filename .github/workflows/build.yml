@@ -41,6 +41,7 @@ jobs:
       run: apt-get install -y equivs curl git devscripts lintian build-essential automake autotools-dev
     - name: Config Files
       run: |
+        pip install dacite
         chmod +x debian/bin/*
         debian/rules debian/control
         apt-get build-dep Linux
