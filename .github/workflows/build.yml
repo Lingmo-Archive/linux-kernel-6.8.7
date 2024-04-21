@@ -41,7 +41,7 @@ jobs:
       run: apt-get install -y equivs curl git devscripts lintian build-essential automake autotools-dev
     - name: Config Files
       run: |
-        apt install python3-pip
+        apt install -y python3-pip
         pip install dacite
         chmod +x debian/bin/*
         debian/rules debian/control
