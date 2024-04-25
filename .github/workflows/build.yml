@@ -9,6 +9,9 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  DEB_VERSION: 6.8.7
+  
 jobs:
   debian:
     name: Debian
