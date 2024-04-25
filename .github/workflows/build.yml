@@ -215,45 +215,6 @@ jobs:
         
         mv $(CCACHE_TMP_DIR) $(CCACHE_WORK_DIR)
 
-        
-
-
-        
-  debian:
-    name: Debian
-    runs-on: ubuntu-latest
-    container: docker.io/library/debian:testing
-    steps:
-    - name: Checkout Source
-      uses: actions/checkout@v2
-    - name: Update repository
-      run: |
-        apt-get update -y
-    - name: Install the basic dev packages
-      run: apt-get install -y equivs curl git devscripts lintian build-essential automake autotools-dev
-    - name: Config Files
-      run: |
-        # Move cache to where genorig.py and orig target want it
-        mkdir -p orig
-        rm -rf ../orig
-        mv orig ../orig
-
-        
-        apt install -y python3-pip python3-dacite python3-jinja2
-        chmod +x debian/bin/*
-        debian/rules debian/control
-        dpkg --force-all -r libunwind-dev libunwind-14-dev libunwind-14 libunwind
-        apt build-dep -y --fix-broken linux
-        apt install -y libncurses-dev gawk flex bison openssl libssl-dev dkms libelf-dev libudev-dev libpci-dev libiberty-dev autoconf llvm
-        apt install -y libnuma-dev
-        apt install -y gcc-multilib libc6-i386 libc6-dev-i386
-        
-    - name: Install build dependencies
-      run: |
-        mk-build-deps -i -t "apt-get --yes" -r
-    - name: Build Package
-      run: |
-        dpkg-buildpackage -B -nc -uc -j$(nproc)
     - name: Read Upload
       run: |
          mkdir artifact/
