@@ -10,23 +10,6 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
-    runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        psabi: [default]
-
-    steps:
-    - name: Maximize build space
-      uses: easimon/maximize-build-space@master
-      with:
-        root-reserve-mb: 4096
-        swap-size-mb: 512
-        remove-dotnet: 'true'
-        remove-android: 'true'
-
-    - uses: actions/checkout@v3
-    
   debian:
     name: Debian
     runs-on: ubuntu-latest
@@ -41,7 +24,7 @@ jobs:
       run: apt-get install -y equivs curl git devscripts lintian build-essential automake autotools-dev
     - name: Config Files
       run: |
-        apt install -y python3-pip python3-dacite
+        apt install -y python3-pip python3-dacite python3-jinja2
         chmod +x debian/bin/*
         debian/rules debian/control
         dpkg --force-all -r libunwind-dev libunwind-14-dev libunwind-14 libunwind
