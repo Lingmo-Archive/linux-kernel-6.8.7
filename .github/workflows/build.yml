@@ -9,60 +9,207 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+env:
+  RELEASE: 'unstable'
+  DEB_BUILD_PROFILES: 'pkg.linux.quick'
+  SALSA_CI_DISABLE_VERSION_BUMP: 'true'
+  DEBIAN_KERNEL_DISABLE_INSTALLER: 'true'
+  DEB_BUILD_OPTIONS: 'terse parallel=4'
+  DEBIAN_KERNEL_DISABLE_BUILD_PACKAGE_ARM64: 0
+  WORKING_DIR: './working'
+  SOURCE_DIR: 'source'
+  BUILD_ARCH: 'amd64' # This should be dynamic based on the runners
+  HOST_ARCH: 'amd64'  # This should be dynamic based on the runners
+  
 jobs:
-  build:
+  extract-source:
     runs-on: ubuntu-latest
-    strategy:
-      matrix:
-        psabi: [default]
-
+    container: docker.io/library/debian:trixie-slim
     steps:
-    - name: Maximize build space
-      uses: easimon/maximize-build-space@master
+    - uses: actions/checkout@v2
       with:
-        root-reserve-mb: 4096
-        swap-size-mb: 512
-        remove-dotnet: 'true'
-        remove-android: 'true'
+        fetch-depth: 0
+    - name: Setup Caching
+      uses: actions/cache@v2
+      with:
+        path: |
+          orig
+          .ccache
+        key: orig-${{ env.RELEASE }}
+    - name: Prepare Environment
+      run: |
+        apt-get update && apt-get install -y eatmydata 
+        eatmydata apt-get install -y debhelper git gpg gpgv kernel-wedge python3 python3-dacite python3-debian python3-jinja2 quilt rsync
+    - name: Extract and Prepare Source
+      run: |
+        # Move cache to where genorig.py and orig target want it
+        mkdir -p orig
+        rm -rf ../orig
+        mv orig ../orig
 
-    - uses: actions/checkout@v3
+        version=$(dpkg-parsechangelog -SVersion)
+        upstream_version=$(echo $version | sed 's/-[^-]*$//')
+
+        # Merge upstream source.  We could use origtargz to download a
+        # tarball fom the archive if available or run uscan if not, but
+        # uscan is currently excessively slow for us (bug #1003251).
+
+        if [ -f ../orig/linux_$upstream_version.orig.tar.xz ]; then
+          ln -s orig/linux_$upstream_version.orig.tar.xz ..
+        else
+            debian/bin/genorig.py https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
+        fi
+
+        debian/rules orig
+
+        # Fudge source version and distribution *before* gencontrol.py
+        sed -i -e '1 s/) [^;]*/+salsaci) UNRELEASED/' debian/changelog
+        version=$version+"salsaci"
     
-  debian:
-    name: Debian
-    runs-on: ubuntu-latest
-    container: docker.io/library/debian:testing
-    steps:
-    - name: Checkout Source
-      uses: actions/checkout@v2
-    - name: Update repository
-      run: |
-        apt-get update -y
-    - name: Install the basic dev packages
-      run: apt-get install -y equivs curl git devscripts lintian build-essential automake autotools-dev
-    - name: Config Files
-      run: |
-        apt install -y python3-pip
-        pip install dacite
-        chmod +x debian/bin/*
-        debian/rules debian/control
-        apt-get build-dep Linux
-        
-    - name: Install build dependencies
-      run: |
-        mk-build-deps -i -t "apt-get --yes" -r
+        # Run gencontrol.py
+        # - create temporary log
+        log="$(mktemp)"
+        # - invoke debian/control-real rule and log output
+        rc=0; debian/rules debian/control-real >"$log" 2>&1 || rc=$?
+        cat "$log"
+        # - check for success message and error code
+        test $rc = 2
+        grep -q 'been generated SUCCESSFULLY' "$log"
+    
+        # Put packed source in artifacts
+        dpkg-buildpackage -uc -us -S -sa -d
+        mkdir -p $WORKING_DIR
+        cp ../orig/linux_$upstream_version.orig.tar.xz $WORKING_DIR
+        mv ../linux_$version.dsc ../linux_$version.debian.tar.xz $WORKING_DIR
+    
+        # Move cache back to where GitLab wants it.  Only include
+        # tarballs, not unpacked source.
+        mkdir orig
+        mv ../orig/*.tar.xz orig
     - name: Build Package
       run: |
-        dpkg-buildpackage -b -nc -uc -j$(nproc)
+        # Unpack the source
+        apt-get update && eatmydata apt-get install --no-install-recommends -y dpkg-dev
+        dpkg-source -x $WORKING_DIR/*.dsc $WORKING_DIR/$SOURCE_DIR
+        
+        export CCACHE_TMP_DIR = $(pwd)/../.ccache
+        export CCACHE_WORK_DIR = $(pwd)/.ccache
+
+        export CCACHE_DIR=$CCACHE_TMP_DIR
+
+        # add target architecture if cross-compiling
+        test -z "$HOST_ARCH" || dpkg --add-architecture $HOST_ARCH
+      
+        # Add deb-src entries
+        
+        if [ -f /etc/apt/sources.list ]; then
+          sed -n '/^deb\s/s//deb-src /p' /etc/apt/sources.list > /etc/apt/sources.list.d/deb-src.list
+        fi
+
+        if [ -f /etc/apt/sources.list.d/debian.sources ]; then
+          sed -i 's/^Types: deb$/Types: deb deb-src/' /etc/apt/sources.list.d/debian.sources
+        fi
+      
+        apt-get update && eatmydata apt-get upgrade -y
+        
+        eatmydata apt-get install --no-install-recommends -y \
+          ccache \
+          fakeroot \
+          build-essential
+      
+        # in case we are cross-building, install some more dependencies
+        # see #815172 why we need libc-dev and libstdc++-dev
+        test -z "$HOST_ARCH" || eatmydata apt-get satisfy --no-install-recommends -y \
+          libc-dev:$HOST_ARCH \
+          libstdc++-dev:$HOST_ARCH \
+          crossbuild-essential-$HOST_ARCH
+        # when cross-compiling, add 'nocheck' to the DEB_BUILD_OPTIONS
+        test -z "$HOST_ARCH" || export DEB_BUILD_OPTIONS="nocheck $DEB_BUILD_OPTIONS"
+      
+        # Disable autogeneration of dbgsym packages. (See #273)
+        if echo "$SALSA_CI_DISABLE_BUILD_DBGSYM" | grep -qE '^(1|yes|true)$'; then
+          export DEB_BUILD_OPTIONS="noautodbgsym $DEB_BUILD_OPTIONS"
+        fi
+      
+        # Enter source package dir
+        cd $WORKING_DIR/$SOURCE_DIR
+      
+        # Install package build dependencies
+        # use plain "apt-get build-dep" so that we can install only packages for
+        # architecture indep or arch:any builds
+        aptopts=""
+        test "$DB_BUILD_TYPE" != "any" || aptopts="--arch-only"
+        test "$DB_BUILD_TYPE" != "all" || aptopts="--indep-only"
+        
+        eatmydata apt-get build-dep --host-architecture $HOST_ARCH -Pcross,nocheck --no-install-recommends -y $aptopts .
+      
+        # If not disabled, bump package version
+        if ! echo "$SALSA_CI_DISABLE_VERSION_BUMP" | grep -qE '^(1|yes|true)$'; then
+          DATESTAMP=$(date +"%Y%m%d")
+          sed -i -e "1 s/)/+salsaci+$(DATESTAMP)+$(CI_PIPELINE_IID))/" debian/changelog
+        fi
+      
+        # Generate ccache links
+        dpkg-reconfigure ccache
+        PATH="/usr/lib/ccache/:$PATH"
+      
+        # Reset ccache stats
+        ccache -z
+      
+        # Create salsaci user and fix permissions
+        useradd --create-home salsaci
+        chown -R 'salsaci:' $WORKING_DIR $CCACHE_DIR
+      
+        # Define buildlog filename
+        BUILD_LOGFILE_SOURCE=$(dpkg-parsechangelog -S Source)
+        BUILD_LOGFILE_VERSION=$(dpkg-parsechangelog -S Version)
+        # BUILD_LOGFILE_VERSION=$(BUILD_LOGFILE_VERSION#*:)
+        BUILD_LOGFILE_ARCH=$BUILD_ARCH
+        BUILD_LOGFILE="$WORKING_DIR/$BUILD_LOGFILE_SOURCE_$BUILD_LOGFILE_VERSION_$BUILD_LOGFILE_ARCH.build"
+      
+        # Define build command
+        export BUILD_COMMAND="eatmydata dpkg-buildpackage --host-arch $HOST_ARCH -Pcross,nocheck --build=$DB_BUILD_TYPE $DB_BUILD_PARAM"
+        # Set architecture to correct in case it is i386 to avoid pitfalls (See #284)
+        test "$BUILD_ARCH" = "i386" && export BUILD_COMMAND="/usr/bin/setarch i686 $BUILD_COMMAND"
+      
+        # Add verbose option for timeout
+          timeout_version="$(timeout --version | awk 'NR==1{print $4)')"
+          if dpkg --compare-versions "$timeout_version" ge 8.29; then
+            export SALSA_CI_BUILD_TIMEOUT_ARGS=" -v $SALSA_CI_BUILD_TIMEOUT_ARGS"
+          fi
+      
+        # Print the build environment
+        printenv | sort
+      
+        # Build package as user salsaci
+        su salsaci -c "timeout $SALSA_CI_BUILD_TIMEOUT_ARGS $BUILD_COMMAND && if [ "$BUILD_TWICE" = "true" ]; then $BUILD_COMMAND; fi" |& OUTPUT_FILENAME=$BUILD_LOGFILE filter-output
+      
+        # Restore PWD to $(WORKING_DIR)
+        cd $WORKING_DIR
+        rm -rf $WORKING_DIR/$SOURCE_DIR
+      
+        # Print ccache stats on job log
+        ccache -s
+      
+        # Print size of artifacts after build
+        du -sh
+      
+        # Warn if job artifacts size limit exceeded
+     
+        mv $CCACHE_TMP_DIR $CCACHE_WORK_DIR
+
+        cd ..
+
     - name: Read Upload
       run: |
          mkdir artifact/
          # find build-sys -type f -name "*.iso" -exec mv {} artifact/ \;
-         sudo mv ../*deb artifact/
+         sudo mv ../*.deb artifact/
             
     - name: Artifact
       uses: actions/upload-artifact@v4
       with:
         name: artifact
-        path: ${{ github.workspace }}/artifact/*
+        path: $({ github.workspace }}/artifact/*
         compression-level: 9 # maximum compression
         if-no-files-found: error # 'warn' or 'ignore' are also available, defaults to `warn`
