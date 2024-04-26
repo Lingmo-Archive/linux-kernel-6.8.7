@@ -54,8 +54,8 @@ jobs:
         # tarball fom the archive if available or run uscan if not, but
         # uscan is currently excessively slow for us (bug #1003251).
 
-        if [ -f ../orig/linux_$(upstream_version).orig.tar.xz ]; then
-          ln -s orig/linux_$(upstream_version).orig.tar.xz ..
+        if [ -f ../orig/linux_$upstream_version.orig.tar.xz ]; then
+          ln -s orig/linux_$upstream_version.orig.tar.xz ..
         else
             debian/bin/genorig.py https://git.kernel.org/pub/scm/linux/kernel/git/stable/linux.git
         fi
@@ -64,7 +64,7 @@ jobs:
 
         # Fudge source version and distribution *before* gencontrol.py
         sed -i -e '1 s/) [^;]*/+salsaci) UNRELEASED/' debian/changelog
-        version=$(version)+salsaci
+        version=$version+"salsaci"
     
         # Run gencontrol.py
         # - create temporary log
@@ -78,9 +78,9 @@ jobs:
     
         # Put packed source in artifacts
         dpkg-buildpackage -uc -us -S -sa -d
-        mkdir -p $(WORKING_DIR)
-        cp ../orig/linux_$(upstream_version).orig.tar.xz $(WORKING_DIR)
-        mv ../linux_$(version).dsc ../linux_$(version).debian.tar.xz $(WORKING_DIR)
+        mkdir -p $WORKING_DIR
+        cp ../orig/linux_$upstream_version.orig.tar.xz $WORKING_DIR
+        mv ../linux_$version.dsc ../linux_$version.debian.tar.xz $WORKING_DIR
     
         # Move cache back to where GitLab wants it.  Only include
         # tarballs, not unpacked source.
@@ -90,7 +90,7 @@ jobs:
       run: |
         # Unpack the source
         apt-get update && eatmydata apt-get install --no-install-recommends -y dpkg-dev
-        dpkg-source -x $(WORKING_DIR)/*.dsc $(WORKING_DIR)/$(SOURCE_DIR)
+        dpkg-source -x $WORKING_DIR/*.dsc $WORKING_DIR/$SOURCE_DIR
         
         export CCACHE_TMP_DIR = $(pwd)/../.ccache
         export CCACHE_WORK_DIR = $(pwd)/.ccache
@@ -98,7 +98,7 @@ jobs:
         export CCACHE_DIR=$CCACHE_TMP_DIR
 
         # add target architecture if cross-compiling
-        test -z "$(HOST_ARCH)" || dpkg --add-architecture $(HOST_ARCH)
+        test -z "$HOST_ARCH" || dpkg --add-architecture $HOST_ARCH
       
         # Add deb-src entries
         
@@ -119,20 +119,20 @@ jobs:
       
         # in case we are cross-building, install some more dependencies
         # see #815172 why we need libc-dev and libstdc++-dev
-        test -z "$(HOST_ARCH)" || eatmydata apt-get satisfy --no-install-recommends -y \
-          libc-dev:$(HOST_ARCH) \
-          libstdc++-dev:$(HOST_ARCH) \
-          crossbuild-essential-$(HOST_ARCH)
+        test -z "$HOST_ARCH" || eatmydata apt-get satisfy --no-install-recommends -y \
+          libc-dev:$HOST_ARCH \
+          libstdc++-dev:$HOST_ARCH \
+          crossbuild-essential-$HOST_ARCH
         # when cross-compiling, add 'nocheck' to the DEB_BUILD_OPTIONS
-        test -z "$(HOST_ARCH)" || export DEB_BUILD_OPTIONS="nocheck $(DEB_BUILD_OPTIONS)"
+        test -z "$HOST_ARCH" || export DEB_BUILD_OPTIONS="nocheck $DEB_BUILD_OPTIONS"
       
         # Disable autogeneration of dbgsym packages. (See #273)
         if echo "$SALSA_CI_DISABLE_BUILD_DBGSYM" | grep -qE '^(1|yes|true)$'; then
-          export DEB_BUILD_OPTIONS="noautodbgsym $(DEB_BUILD_OPTIONS)"
+          export DEB_BUILD_OPTIONS="noautodbgsym $DEB_BUILD_OPTIONS"
         fi
       
         # Enter source package dir
-        cd $(WORKING_DIR)/$(SOURCE_DIR)
+        cd $WORKING_DIR/$SOURCE_DIR
       
         # Install package build dependencies
         # use plain "apt-get build-dep" so that we can install only packages for
@@ -140,20 +140,8 @@ jobs:
         aptopts=""
         test "$DB_BUILD_TYPE" != "any" || aptopts="--arch-only"
         test "$DB_BUILD_TYPE" != "all" || aptopts="--indep-only"
-        # use aspcud solver for experimental and backports
-        if [ "$RELEASE" = "experimental" ] || [[ "$RELEASE" =~ .*-backports$ ]]; then
-          eatmydata apt-get install --no-install-recommends -y aspcud apt-cudf
-          aptopts="$aptopts --solver aspcud -oAPT::Solver::Strict-Pinning=false -oAPT::Solver::aspcud::Preferences="
-          # minimize number of packages from experimental and backports
-          if [ "$RELEASE" = "experimental" ]; then
-            aptopts="$aptopts-count(solution,APT-Release:=/a=experimental/),"
-          elif [[ "$RELEASE" =~ .*-backports$ ]]; then
-            aptopts="$aptopts-count(solution,APT-Release:~/a=.*-backports/),"
-          fi
-          aptopts="$aptopts-removed,-changed,-new"
-        fi
         
-        eatmydata apt-get build-dep $(HOST_ARCH:+--host-architecture $(HOST_ARCH) -Pcross,nocheck) --no-install-recommends -y $aptopts .
+        eatmydata apt-get build-dep --host-architecture $HOST_ARCH -Pcross,nocheck --no-install-recommends -y $aptopts .
       
         # If not disabled, bump package version
         if ! echo "$SALSA_CI_DISABLE_VERSION_BUMP" | grep -qE '^(1|yes|true)$'; then
@@ -163,42 +151,42 @@ jobs:
       
         # Generate ccache links
         dpkg-reconfigure ccache
-        PATH="/usr/lib/ccache/:$(PATH)"
+        PATH="/usr/lib/ccache/:$PATH"
       
         # Reset ccache stats
         ccache -z
       
         # Create salsaci user and fix permissions
         useradd --create-home salsaci
-        chown -R 'salsaci:' $(WORKING_DIR) $(CCACHE_DIR)
+        chown -R 'salsaci:' $WORKING_DIR $CCACHE_DIR
       
         # Define buildlog filename
         BUILD_LOGFILE_SOURCE=$(dpkg-parsechangelog -S Source)
         BUILD_LOGFILE_VERSION=$(dpkg-parsechangelog -S Version)
-        BUILD_LOGFILE_VERSION=$(BUILD_LOGFILE_VERSION#*:)
-        BUILD_LOGFILE_ARCH=$(HOST_ARCH:-$(BUILD_ARCH))
-        BUILD_LOGFILE="$(WORKING_DIR)/$(BUILD_LOGFILE_SOURCE)_$(BUILD_LOGFILE_VERSION)_$(BUILD_LOGFILE_ARCH).build"
+        # BUILD_LOGFILE_VERSION=$(BUILD_LOGFILE_VERSION#*:)
+        BUILD_LOGFILE_ARCH=$BUILD_ARCH
+        BUILD_LOGFILE="$WORKING_DIR/$BUILD_LOGFILE_SOURCE_$BUILD_LOGFILE_VERSION_$BUILD_LOGFILE_ARCH.build"
       
         # Define build command
-        export BUILD_COMMAND="eatmydata dpkg-buildpackage $(HOST_ARCH:+--host-arch $(HOST_ARCH) -Pcross,nocheck) --build=$(DB_BUILD_TYPE) $(DB_BUILD_PARAM)"
+        export BUILD_COMMAND="eatmydata dpkg-buildpackage --host-arch $HOST_ARCH -Pcross,nocheck --build=$DB_BUILD_TYPE $DB_BUILD_PARAM"
         # Set architecture to correct in case it is i386 to avoid pitfalls (See #284)
-        test "$(BUILD_ARCH)" = "i386" && export BUILD_COMMAND="/usr/bin/setarch i686 $(BUILD_COMMAND)"
+        test "$BUILD_ARCH" = "i386" && export BUILD_COMMAND="/usr/bin/setarch i686 $BUILD_COMMAND"
       
         # Add verbose option for timeout
           timeout_version="$(timeout --version | awk 'NR==1{print $4)')"
           if dpkg --compare-versions "$timeout_version" ge 8.29; then
-            export SALSA_CI_BUILD_TIMEOUT_ARGS=" -v $(SALSA_CI_BUILD_TIMEOUT_ARGS)"
+            export SALSA_CI_BUILD_TIMEOUT_ARGS=" -v $SALSA_CI_BUILD_TIMEOUT_ARGS"
           fi
       
         # Print the build environment
         printenv | sort
       
         # Build package as user salsaci
-        su salsaci -c "timeout $(SALSA_CI_BUILD_TIMEOUT_ARGS) $(BUILD_COMMAND) && if [ "$(BUILD_TWICE)" = "true" ]; then $(BUILD_COMMAND); fi" |& OUTPUT_FILENAME=$(BUILD_LOGFILE) filter-output
+        su salsaci -c "timeout $SALSA_CI_BUILD_TIMEOUT_ARGS $BUILD_COMMAND && if [ "$BUILD_TWICE" = "true" ]; then $BUILD_COMMAND; fi" |& OUTPUT_FILENAME=$BUILD_LOGFILE filter-output
       
         # Restore PWD to $(WORKING_DIR)
-        cd $(WORKING_DIR)
-        rm -rf $(WORKING_DIR)/$(SOURCE_DIR)
+        cd $WORKING_DIR
+        rm -rf $WORKING_DIR/$SOURCE_DIR
       
         # Print ccache stats on job log
         ccache -s
@@ -207,13 +195,10 @@ jobs:
         du -sh
       
         # Warn if job artifacts size limit exceeded
-        - |
-          if [ "$(du -s | cut -f1)" -gt $(SALSA_CI_MAX_ARTIFACTS_SIZE) ]; then
-            echo -e "\e[91m WARNING: job artifacts exceed the size limit of $(( $(SALSA_CI_MAX_ARTIFACTS_SIZE) / 1024 ))MB which may prevent the job to succeed.\e[39m"
-          fi
+     
+        mv $CCACHE_TMP_DIR $CCACHE_WORK_DIR
 
-        
-        mv $(CCACHE_TMP_DIR) $(CCACHE_WORK_DIR)
+        cd ..
 
     - name: Read Upload
       run: |
